@@ -196,8 +196,8 @@ export default function CreatePipeline() {
         s3_path: ingestionType === 'one_time' ? selectedFile! : s3Prefix,
         target_database: targetDatabase,
         target_schema: targetSchema,
-        target_table: targetTable || undefined, // Send undefined if empty to trigger auto-generation
-        file_format: fileType || detectedFileFormat || undefined, // Use selected file type or auto-detect
+        target_table: ingestionType === 'snowpipe' ? targetTable : (targetTable || undefined), // Required for Snowpipe, optional for one-time
+        file_format: ingestionType === 'snowpipe' ? 'JSON' : (fileType || detectedFileFormat || undefined), // Force JSON for Snowpipe
         copy_options: Object.keys(copyOptions).length > 0 ? copyOptions : undefined,
       }
 
@@ -223,7 +223,11 @@ export default function CreatePipeline() {
           return s3Prefix.trim() !== ''
         }
       case 4:
-        return targetDatabase.trim() !== '' && targetSchema.trim() !== ''
+        const hasDatabaseAndSchema = targetDatabase.trim() !== '' && targetSchema.trim() !== ''
+        if (ingestionType === 'snowpipe') {
+          return hasDatabaseAndSchema && targetTable.trim() !== ''
+        }
+        return hasDatabaseAndSchema
       default:
         return false
     }
@@ -490,7 +494,14 @@ export default function CreatePipeline() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
-            {detectedFileFormat && (
+            {ingestionType === 'snowpipe' && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3">
+                <p className="text-sm text-yellow-800">
+                  <strong>Note:</strong> Snowpipe currently only supports JSON file format. The table will be created with a VARIANT column for raw JSON data plus metadata columns.
+                </p>
+              </div>
+            )}
+            {detectedFileFormat && ingestionType === 'one_time' && (
               <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
                 <p className="text-sm text-blue-800">
                   <strong>Detected file format:</strong> {detectedFileFormat}
@@ -554,17 +565,20 @@ export default function CreatePipeline() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Table <span className="text-gray-500 text-xs">(optional)</span>
+                  Table {ingestionType === 'snowpipe' ? <span className="text-red-500">*</span> : <span className="text-gray-500 text-xs">(optional)</span>}
                 </label>
                 <input
                   type="text"
+                  required={ingestionType === 'snowpipe'}
                   value={targetTable}
                   onChange={(e) => setTargetTable(e.target.value)}
-                  placeholder="Auto-generated from filename"
+                  placeholder={ingestionType === 'snowpipe' ? "Table name (required)" : "Auto-generated from filename"}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Leave empty to auto-generate from filename
+                  {ingestionType === 'snowpipe' 
+                    ? 'Table name is required for Snowpipe pipelines' 
+                    : 'Leave empty to auto-generate from filename'}
                 </p>
               </div>
             </div>
@@ -594,17 +608,28 @@ export default function CreatePipeline() {
                       File Type
                     </label>
                     <select
-                      value={fileType || detectedFileFormat || 'CSV'}
+                      value={ingestionType === 'snowpipe' ? 'JSON' : (fileType || detectedFileFormat || 'CSV')}
                       onChange={(e) => {
-                        setFileType(e.target.value)
+                        if (ingestionType === 'snowpipe') {
+                          // Force JSON for Snowpipe
+                          setFileType('JSON')
+                        } else {
+                          setFileType(e.target.value)
+                        }
                         setCopyOptions({}) // Reset options when file type changes
                       }}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      disabled={ingestionType === 'snowpipe'}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     >
                       <option value="CSV">CSV</option>
                       <option value="JSON">JSON</option>
                       <option value="PARQUET">Parquet</option>
                     </select>
+                    {ingestionType === 'snowpipe' && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        JSON is the only supported format for Snowpipe
+                      </p>
+                    )}
                   </div>
 
                   {/* CSV Options */}

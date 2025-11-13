@@ -2,22 +2,28 @@ import snowflake.connector
 from typing import Dict, Optional, List
 
 
-def get_snowflake_connection(account: str, user: str, password: str, warehouse: str, database: str, schema: str):
+def get_snowflake_connection(account: str, user: str, password: str, warehouse: Optional[str] = None, database: Optional[str] = None, schema: Optional[str] = None, role: Optional[str] = None):
     """Create Snowflake connection."""
-    return snowflake.connector.connect(
-        user=user,
-        password=password,
-        account=account,
-        warehouse=warehouse,
-        database=database,
-        schema=schema
-    )
+    connection_params = {
+        "user": user,
+        "password": password,
+        "account": account
+    }
+    if warehouse:
+        connection_params["warehouse"] = warehouse
+    if database:
+        connection_params["database"] = database
+    if schema:
+        connection_params["schema"] = schema
+    if role:
+        connection_params["role"] = role
+    return snowflake.connector.connect(**connection_params)
 
 
-def test_snowflake_connection(account: str, user: str, password: str, warehouse: str, database: str, schema: str):
+def test_snowflake_connection(account: str, user: str, password: str, warehouse: Optional[str] = None, database: Optional[str] = None, schema: Optional[str] = None, role: Optional[str] = None):
     """Test Snowflake connection."""
     try:
-        conn = get_snowflake_connection(account, user, password, warehouse, database, schema)
+        conn = get_snowflake_connection(account, user, password, warehouse, database, schema, role)
         conn.close()
     except Exception as e:
         raise Exception(f"Snowflake connection failed: {str(e)}")
@@ -116,19 +122,93 @@ def create_external_stage(conn, database: str, schema: str, stage_name: str, s3_
     return stage_name
 
 
-def create_snowpipe(conn, database: str, schema: str, pipe_name: str, stage_name: str, table_name: str, file_format: str = "CSV"):
-    """Create Snowpipe for continuous ingestion."""
+def create_snowpipe(conn, database: str, schema: str, pipe_name: str, stage_name: str, table_name: str, file_format: str = "JSON", copy_options: Optional[Dict] = None):
+    """Create Snowpipe for continuous ingestion with AUTO_INGEST enabled."""
+    # Build FILE_FORMAT options
+    file_format_options = build_file_format_options(file_format, copy_options)
+    
+    # Build COPY INTO statement based on format type
+    if file_format.upper() == "JSON":
+        # For JSON, map to VARIANT column and include metadata
+        copy_sql = f"""COPY INTO {database}.{schema}.{table_name} (raw_data, metadata_filename, metadata_file_row_number, metadata_file_content_key, metadata_file_last_modified)
+FROM (
+    SELECT 
+        $1::VARIANT AS raw_data,
+        METADATA$FILENAME AS metadata_filename,
+        METADATA$FILE_ROW_NUMBER AS metadata_file_row_number,
+        METADATA$FILE_CONTENT_KEY AS metadata_file_content_key,
+        METADATA$FILE_LAST_MODIFIED AS metadata_file_last_modified
+    FROM @{database}.{schema}.{stage_name}
+)
+FILE_FORMAT = ({file_format_options})"""
+    else:
+        # For other formats (future support)
+        copy_sql = f"""COPY INTO {database}.{schema}.{table_name}
+FROM @{database}.{schema}.{stage_name}
+FILE_FORMAT = ({file_format_options})"""
+    
     create_sql = f"""
     CREATE OR REPLACE PIPE {database}.{schema}.{pipe_name}
-    AUTO_INGEST = FALSE
+    AUTO_INGEST = TRUE
     AS
-    COPY INTO {database}.{schema}.{table_name}
-    FROM @{database}.{schema}.{stage_name}
-    FILE_FORMAT = (TYPE = '{file_format}')
+    {copy_sql}
     """
     
     execute_sql(conn, create_sql)
     return pipe_name
+
+
+def get_snowpipe_sqs_arn(conn, database: str, schema: str, pipe_name: str) -> str:
+    """Get SQS ARN from Snowpipe using DESCRIBE PIPE."""
+    cursor = conn.cursor()
+    try:
+        describe_sql = f"DESC PIPE {database}.{schema}.{pipe_name}"
+        cursor.execute(describe_sql)
+        result = cursor.fetchall()
+        
+        # DESCRIBE PIPE returns a result set with columns
+        # The exact format may vary, but typically includes property names and values
+        # Look for notification-related properties
+        
+        # First, let's check what columns we have
+        column_names = [desc[0] for desc in cursor.description] if cursor.description else []
+        
+        # Try to find the notification channel/SQS ARN
+        # It might be in different columns depending on Snowflake version
+        for row in result:
+            # Check all columns for SQS ARN patterns (arn:aws:sqs:)
+            for i, value in enumerate(row):
+                if value and isinstance(value, str):
+                    value_str = str(value).strip()
+                    # Look for SQS ARN pattern
+                    if value_str.startswith("arn:aws:sqs:") or "sqs" in value_str.lower():
+                        return value_str
+                    # Also check if this column name suggests it's the notification channel
+                    if i < len(column_names):
+                        col_name = str(column_names[i]).upper()
+                        if "NOTIFICATION" in col_name or "CHANNEL" in col_name or "SQS" in col_name:
+                            if value_str:
+                                return value_str
+            
+            # Also check if row[0] is a property name and row[1] is the value
+            if len(row) >= 2:
+                property_name = str(row[0]).upper() if row[0] else ""
+                property_value = str(row[1]).strip() if row[1] else ""
+                
+                # Check various possible property names
+                if any(keyword in property_name for keyword in ["NOTIFICATION", "CHANNEL", "SQS", "QUEUE"]):
+                    if property_value and (property_value.startswith("arn:aws:sqs:") or "sqs" in property_value.lower()):
+                        return property_value
+                
+                # If property name matches and value exists, return it
+                if property_name in ["NOTIFICATION_CHANNEL", "CHANNEL", "SQS_ARN"] and property_value:
+                    return property_value
+        
+        # If we still haven't found it, raise an error with debug info
+        debug_info = f"Columns: {column_names}, Rows: {len(result)}"
+        raise Exception(f"SQS ARN not found in pipe description. {debug_info}. Pipe may not have AUTO_INGEST enabled or may need a moment to initialize.")
+    finally:
+        cursor.close()
 
 
 def build_file_format_options(file_format: str, copy_options: Optional[Dict] = None) -> str:

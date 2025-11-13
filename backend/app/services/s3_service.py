@@ -68,3 +68,83 @@ def preview_s3_file(access_key_id: str, secret_access_key: str, bucket: str, key
     except ClientError as e:
         raise Exception(f"Failed to preview S3 file: {str(e)}")
 
+
+def create_s3_event_notification(
+    access_key_id: str,
+    secret_access_key: str,
+    bucket: str,
+    prefix: str,
+    sqs_arn: str,
+    region: str = "us-east-1"
+) -> str:
+    """Create S3 event notification for Snowpipe auto-ingest.
+    
+    Args:
+        access_key_id: AWS access key ID
+        secret_access_key: AWS secret access key
+        bucket: S3 bucket name
+        prefix: S3 prefix/path to monitor
+        sqs_arn: SQS ARN from Snowpipe
+        region: AWS region
+        
+    Returns:
+        Event notification configuration ID
+    """
+    s3_client = get_s3_client(access_key_id, secret_access_key, region)
+    
+    try:
+        # Normalize prefix - remove leading slash, ensure trailing slash if not empty
+        normalized_prefix = prefix.strip('/')
+        if normalized_prefix and not normalized_prefix.endswith('/'):
+            normalized_prefix += '/'
+        
+        # Create event notification configuration
+        # Snowpipe expects events on object creation
+        notification_config = {
+            'QueueConfigurations': [
+                {
+                    'QueueArn': sqs_arn,
+                    'Events': ['s3:ObjectCreated:*'],  # Trigger on any object creation
+                    'Filter': {
+                        'Key': {
+                            'FilterRules': [
+                                {
+                                    'Name': 'prefix',
+                                    'Value': normalized_prefix
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+        
+        # Get existing notification configuration
+        try:
+            existing_config = s3_client.get_bucket_notification_configuration(Bucket=bucket)
+            
+            # Merge with existing queue configurations
+            existing_queues = existing_config.get('QueueConfigurations', [])
+            # Check if this SQS ARN already exists
+            for queue_config in existing_queues:
+                if queue_config.get('QueueArn') == sqs_arn:
+                    # Update existing configuration
+                    notification_config['QueueConfigurations'] = existing_queues
+                    break
+            else:
+                # Add new queue configuration
+                notification_config['QueueConfigurations'] = existing_queues + notification_config['QueueConfigurations']
+        except ClientError:
+            # No existing configuration, use new one
+            pass
+        
+        # Put the notification configuration
+        s3_client.put_bucket_notification_configuration(
+            Bucket=bucket,
+            NotificationConfiguration=notification_config
+        )
+        
+        return f"Event notification created for prefix: {normalized_prefix}"
+    except ClientError as e:
+        raise Exception(f"Failed to create S3 event notification: {str(e)}")
+

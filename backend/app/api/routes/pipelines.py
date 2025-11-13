@@ -147,6 +147,15 @@ def create_pipeline(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Table name is required for Snowpipe pipelines"
                 )
+            
+            # Validate file format - currently only JSON is supported
+            file_format = pipeline.file_format or "JSON"
+            if file_format.upper() != "JSON":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Snowpipe currently only supports JSON file format"
+                )
+            
             final_table_name = pipeline.target_table
             
             # Create pipeline record
@@ -162,8 +171,9 @@ def create_pipeline(
                 target_table=final_table_name,
                 status=PipelineStatus.ACTIVE,
                 config={
-                    "file_format": pipeline.file_format,
-                    "s3_bucket": pipeline.s3_bucket
+                    "file_format": file_format,
+                    "s3_bucket": pipeline.s3_bucket,
+                    "copy_options": pipeline.copy_options
                 }
             )
             db.add(db_pipeline)
@@ -180,7 +190,8 @@ def create_pipeline(
                 pipeline.target_schema,
                 final_table_name,
                 pipe_name,
-                pipeline.file_format
+                file_format,
+                pipeline.copy_options
             )
             
             db_pipeline.snowpipe_name = result["pipe_name"]

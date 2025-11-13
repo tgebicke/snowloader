@@ -1,14 +1,16 @@
 import json
+import time
 from typing import Dict, Optional, Any
 from app.services.snowflake_service import (
     get_snowflake_connection,
     create_table_from_schema,
     create_external_stage,
     create_snowpipe,
+    get_snowpipe_sqs_arn,
     copy_into_table,
     execute_sql
 )
-from app.services.s3_service import get_s3_client, preview_s3_file
+from app.services.s3_service import get_s3_client, preview_s3_file, create_s3_event_notification
 from app.core.security import decrypt_data
 from app.api.models.database import Connection, ConnectionType, IngestionType
 
@@ -107,13 +109,15 @@ def create_one_time_pipeline(
     )
     
     # Connect to Snowflake
+    # Use provided target_database and target_schema, or fall back to connection defaults
     conn = get_snowflake_connection(
         sf_creds['account'],
         sf_creds['user'],
         sf_creds['password'],
-        sf_creds['warehouse'],
-        sf_creds['database'],
-        sf_creds['schema']
+        sf_creds.get('warehouse'),
+        target_database or sf_creds.get('database'),
+        target_schema or sf_creds.get('schema'),
+        sf_creds.get('role')
     )
     
     try:
@@ -163,9 +167,21 @@ def create_snowpipe_pipeline(
     target_schema: str,
     target_table: str,
     pipe_name: str,
-    file_format: str = "CSV"
+    file_format: str = "JSON",
+    copy_options: Optional[Dict] = None
 ) -> Dict:
-    """Create Snowpipe for continuous ingestion."""
+    """Create Snowpipe for continuous ingestion with auto-ingest enabled.
+    
+    Currently only supports JSON file format. Creates:
+    1. Table with VARIANT column + metadata columns
+    2. External stage pointing to S3
+    3. Snowpipe with AUTO_INGEST = TRUE
+    4. S3 event notification for automatic ingestion
+    """
+    # Validate file format
+    if file_format.upper() != "JSON":
+        raise Exception("Snowpipe currently only supports JSON file format")
+    
     # Decrypt credentials
     s3_creds_json = decrypt_data(s3_connection.encrypted_credentials)
     s3_creds = json.loads(s3_creds_json)
@@ -174,26 +190,35 @@ def create_snowpipe_pipeline(
     sf_creds = json.loads(sf_creds_json)
     
     # Connect to Snowflake
+    # Use provided target_database and target_schema, or fall back to connection defaults
     conn = get_snowflake_connection(
         sf_creds['account'],
         sf_creds['user'],
         sf_creds['password'],
-        sf_creds['warehouse'],
-        sf_creds['database'],
-        sf_creds['schema']
+        sf_creds.get('warehouse'),
+        target_database or sf_creds.get('database'),
+        target_schema or sf_creds.get('schema'),
+        sf_creds.get('role')
     )
     
     try:
-        # Create table (need to detect schema from a sample file if available)
-        # For MVP, create a simple table structure
-        # In production, you'd want to detect schema from a sample file
+        # Create table with JSON schema (VARIANT + metadata columns)
         columns = [
-            {"name": "raw_data", "type": "VARIANT", "nullable": True}
+            {"name": "raw_data", "type": "VARIANT", "nullable": True},
+            {"name": "metadata_filename", "type": "VARCHAR", "nullable": True},
+            {"name": "metadata_file_row_number", "type": "NUMBER", "nullable": True},
+            {"name": "metadata_file_content_key", "type": "VARCHAR", "nullable": True},
+            {"name": "metadata_file_last_modified", "type": "TIMESTAMP_NTZ", "nullable": True}
         ]
         create_table_from_schema(conn, target_database, target_schema, target_table, columns)
         
         # Create external stage
-        s3_url = f"s3://{s3_bucket}/{s3_prefix}"
+        # Normalize S3 URL - ensure prefix doesn't have leading slash, add trailing slash if prefix provided
+        normalized_prefix = s3_prefix.strip('/')
+        if normalized_prefix and not normalized_prefix.endswith('/'):
+            normalized_prefix += '/'
+        s3_url = f"s3://{s3_bucket}/{normalized_prefix}" if normalized_prefix else f"s3://{s3_bucket}/"
+        
         stage_name = f"STAGE_{target_table}"
         create_external_stage(
             conn,
@@ -207,21 +232,50 @@ def create_snowpipe_pipeline(
             }
         )
         
-        # Create Snowpipe
+        # Create Snowpipe with AUTO_INGEST = TRUE
         full_pipe_name = f"{target_database}.{target_schema}.{pipe_name}"
         create_snowpipe(
             conn,
             target_database,
             target_schema,
             pipe_name,
-            f"{target_database}.{target_schema}.{stage_name}",
-            f"{target_database}.{target_schema}.{target_table}",
-            file_format
+            stage_name,  # Just the stage name, not fully qualified - function adds database.schema prefix
+            target_table,  # Just the table name, not fully qualified - function adds database.schema prefix
+            file_format,
+            copy_options
+        )
+        
+        # Get SQS ARN from the pipe
+        # Snowflake may need a moment to initialize the notification channel
+        sqs_arn = None
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                sqs_arn = get_snowpipe_sqs_arn(conn, target_database, target_schema, pipe_name)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    # Wait a bit before retrying (Snowflake may need time to initialize)
+                    time.sleep(1)
+                else:
+                    # On final attempt, raise the error
+                    raise Exception(f"Failed to retrieve SQS ARN after {max_retries} attempts: {str(e)}")
+        
+        # Create S3 event notification
+        event_result = create_s3_event_notification(
+            s3_creds['access_key_id'],
+            s3_creds['secret_access_key'],
+            s3_bucket,
+            normalized_prefix,
+            sqs_arn,
+            s3_creds.get('region', 'us-east-1')
         )
         
         return {
             "status": "success",
-            "pipe_name": full_pipe_name
+            "pipe_name": full_pipe_name,
+            "sqs_arn": sqs_arn,
+            "event_notification": event_result
         }
     finally:
         conn.close()

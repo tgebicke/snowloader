@@ -42,14 +42,35 @@ export async function apiRequest<T>(
   return response.json()
 }
 
+export interface ConnectionDetail extends Connection {
+  credentials: Record<string, any>
+}
+
 // Connection APIs
 export const connectionsApi = {
   list: () => apiRequest<Connection[]>('/api/connections'),
+  get: (id: number) => apiRequest<ConnectionDetail>('/api/connections/' + id),
   createS3: (data: S3ConnectionData) => apiRequest<Connection>('/api/connections/s3', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
   createSnowflake: (data: SnowflakeConnectionData) => apiRequest<Connection>('/api/connections/snowflake', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  updateS3: (id: number, data: S3ConnectionData) => apiRequest<Connection>('/api/connections/' + id + '/s3', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  updateSnowflake: (id: number, data: SnowflakeConnectionData) => apiRequest<Connection>('/api/connections/' + id + '/snowflake', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  testS3: (data: S3ConnectionData) => apiRequest<{ status: string; message: string }>('/api/connections/s3/test', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  testSnowflake: (data: SnowflakeConnectionData) => apiRequest<{ status: string; message: string }>('/api/connections/snowflake/test', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
@@ -106,9 +127,7 @@ export interface SnowflakeConnectionData {
   account: string
   user: string
   password: string
-  warehouse: string
-  database: string
-  schema: string
+  role?: string
 }
 
 export interface S3File {
