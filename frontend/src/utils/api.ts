@@ -59,17 +59,18 @@ export const connectionsApi = {
     const params = database ? '?database=' + encodeURIComponent(database) : ''
     return apiRequest<{ schemas: string[] }>('/api/connections/' + connectionId + '/schemas' + params)
   },
+  getBuckets: (connectionId: number) => apiRequest<{ buckets: string[] }>('/api/connections/' + connectionId + '/buckets'),
 }
 
 // S3 APIs
 export const s3Api = {
-  list: (connectionId: number, prefix: string = '') => apiRequest<S3File[]>('/api/s3/list', {
+  list: (connectionId: number, bucket: string, prefix: string = '') => apiRequest<S3File[]>('/api/s3/list', {
     method: 'POST',
-    body: JSON.stringify({ connection_id: connectionId, prefix }),
+    body: JSON.stringify({ connection_id: connectionId, bucket, prefix }),
   }),
-  preview: (connectionId: number, key: string, lines: number = 10) => apiRequest<{ lines: string[] }>('/api/s3/preview', {
+  preview: (connectionId: number, bucket: string, key: string, lines: number = 10) => apiRequest<{ lines: string[] }>('/api/s3/preview', {
     method: 'POST',
-    body: JSON.stringify({ connection_id: connectionId, key, lines }),
+    body: JSON.stringify({ connection_id: connectionId, bucket, key, lines }),
   }),
 }
 
@@ -97,7 +98,6 @@ export interface S3ConnectionData {
   name: string
   access_key_id: string
   secret_access_key: string
-  bucket: string
   region: string
 }
 
@@ -132,6 +132,7 @@ export interface PipelineCreateData {
   name: string
   ingestion_type: string
   s3_connection_id: number
+  s3_bucket: string
   snowflake_connection_id: number
   s3_path: string
   target_database: string

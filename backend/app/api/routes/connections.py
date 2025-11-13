@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.api.models.database import User, Connection, ConnectionType
 from app.api.routes.auth import get_current_user
 from app.core.security import encrypt_data, decrypt_data
-from app.services.s3_service import test_s3_connection
+from app.services.s3_service import test_s3_connection, list_buckets
 from app.services.snowflake_service import test_snowflake_connection, get_snowflake_connection, list_databases, list_schemas
 
 router = APIRouter()
@@ -18,7 +18,6 @@ class S3ConnectionCreate(BaseModel):
     name: str
     access_key_id: str
     secret_access_key: str
-    bucket: str
     region: str = "us-east-1"
 
 
@@ -54,7 +53,6 @@ def create_s3_connection(
         test_s3_connection(
             connection.access_key_id,
             connection.secret_access_key,
-            connection.bucket,
             connection.region
         )
     except Exception as e:
@@ -63,11 +61,10 @@ def create_s3_connection(
             detail=f"Failed to connect to S3: {str(e)}"
         )
     
-    # Encrypt credentials
+    # Encrypt credentials (without bucket)
     credentials = {
         "access_key_id": connection.access_key_id,
         "secret_access_key": connection.secret_access_key,
-        "bucket": connection.bucket,
         "region": connection.region
     }
     encrypted_credentials = encrypt_data(json.dumps(credentials))
@@ -276,5 +273,43 @@ def get_schemas(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch schemas: {str(e)}"
+        )
+
+
+@router.get("/connections/{connection_id}/buckets")
+def get_buckets(
+    connection_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get list of buckets for an S3 connection."""
+    connection = db.query(Connection).filter(
+        Connection.id == connection_id,
+        Connection.user_id == current_user.id,
+        Connection.type == ConnectionType.S3
+    ).first()
+    
+    if not connection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="S3 connection not found"
+        )
+    
+    # Decrypt credentials
+    credentials_json = decrypt_data(connection.encrypted_credentials)
+    credentials = json.loads(credentials_json)
+    
+    # List buckets
+    try:
+        buckets = list_buckets(
+            credentials['access_key_id'],
+            credentials['secret_access_key'],
+            credentials.get('region', 'us-east-1')
+        )
+        return {"buckets": buckets}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch buckets: {str(e)}"
         )
 

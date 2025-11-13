@@ -19,6 +19,7 @@ class PipelineCreate(BaseModel):
     name: str
     ingestion_type: str  # "one_time" or "snowpipe"
     s3_connection_id: int
+    s3_bucket: str  # Bucket name selected by user
     snowflake_connection_id: int
     s3_path: str  # File path for one-time, prefix for Snowpipe
     target_database: str
@@ -106,7 +107,8 @@ def create_pipeline(
                 status=PipelineStatus.ACTIVE,
                 config={
                     "file_format": pipeline.file_format,
-                    "copy_options": pipeline.copy_options
+                    "copy_options": pipeline.copy_options,
+                    "s3_bucket": pipeline.s3_bucket
                 }
             )
             db.add(db_pipeline)
@@ -116,6 +118,7 @@ def create_pipeline(
             result = create_one_time_pipeline(
                 s3_conn,
                 sf_conn,
+                pipeline.s3_bucket,
                 pipeline.s3_path,
                 pipeline.target_database,
                 pipeline.target_schema,
@@ -158,7 +161,10 @@ def create_pipeline(
                 target_schema=pipeline.target_schema,
                 target_table=final_table_name,
                 status=PipelineStatus.ACTIVE,
-                config={"file_format": pipeline.file_format}
+                config={
+                    "file_format": pipeline.file_format,
+                    "s3_bucket": pipeline.s3_bucket
+                }
             )
             db.add(db_pipeline)
             db.flush()  # Get the ID without committing
@@ -168,6 +174,7 @@ def create_pipeline(
             result = create_snowpipe_pipeline(
                 s3_conn,
                 sf_conn,
+                pipeline.s3_bucket,
                 pipeline.s3_path,
                 pipeline.target_database,
                 pipeline.target_schema,
@@ -318,9 +325,16 @@ def run_pipeline(
     try:
         file_format = pipeline.config.get("file_format", "CSV") if pipeline.config else "CSV"
         copy_options = pipeline.config.get("copy_options") if pipeline.config else None
+        s3_bucket = pipeline.config.get("s3_bucket") if pipeline.config else None
+        if not s3_bucket:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="S3 bucket not found in pipeline configuration"
+            )
         result = create_one_time_pipeline(
             s3_conn,
             sf_conn,
+            s3_bucket,
             pipeline.s3_path,
             pipeline.target_database,
             pipeline.target_schema,

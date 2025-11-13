@@ -15,6 +15,7 @@ router = APIRouter()
 
 class S3ListRequest(BaseModel):
     connection_id: int
+    bucket: str
     prefix: str = ""
 
 
@@ -26,6 +27,7 @@ class S3FileResponse(BaseModel):
 
 class S3PreviewRequest(BaseModel):
     connection_id: int
+    bucket: str
     key: str
     lines: int = 10
 
@@ -59,7 +61,7 @@ def list_s3_objects(
         files = list_s3_files(
             credentials['access_key_id'],
             credentials['secret_access_key'],
-            credentials['bucket'],
+            request.bucket,
             request.prefix,
             credentials.get('region', 'us-east-1')
         )
@@ -100,7 +102,7 @@ def preview_s3_object(
         lines = preview_s3_file(
             credentials['access_key_id'],
             credentials['secret_access_key'],
-            credentials['bucket'],
+            request.bucket,
             request.key,
             credentials.get('region', 'us-east-1'),
             request.lines

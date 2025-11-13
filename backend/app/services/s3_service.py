@@ -13,13 +13,27 @@ def get_s3_client(access_key_id: str, secret_access_key: str, region: str):
     )
 
 
-def test_s3_connection(access_key_id: str, secret_access_key: str, bucket: str, region: str):
-    """Test S3 connection by listing bucket."""
+def test_s3_connection(access_key_id: str, secret_access_key: str, region: str):
+    """Test S3 connection by listing buckets."""
     try:
         s3_client = get_s3_client(access_key_id, secret_access_key, region)
-        s3_client.head_bucket(Bucket=bucket)
+        # Test by listing buckets - this validates credentials
+        s3_client.list_buckets()
     except ClientError as e:
         raise Exception(f"S3 connection failed: {str(e)}")
+    except NoCredentialsError:
+        raise Exception("Invalid AWS credentials")
+
+
+def list_buckets(access_key_id: str, secret_access_key: str, region: str = "us-east-1") -> List[str]:
+    """List all buckets available to the AWS credentials."""
+    try:
+        s3_client = get_s3_client(access_key_id, secret_access_key, region)
+        response = s3_client.list_buckets()
+        buckets = [bucket['Name'] for bucket in response.get('Buckets', [])]
+        return sorted(buckets)
+    except ClientError as e:
+        raise Exception(f"Failed to list buckets: {str(e)}")
     except NoCredentialsError:
         raise Exception("Invalid AWS credentials")
 

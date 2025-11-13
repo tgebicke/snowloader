@@ -60,6 +60,7 @@ def detect_schema_from_file(access_key_id: str, secret_access_key: str, bucket: 
 def create_one_time_pipeline(
     s3_connection: Connection,
     snowflake_connection: Connection,
+    s3_bucket: str,
     s3_path: str,
     target_database: str,
     target_schema: str,
@@ -99,7 +100,7 @@ def create_one_time_pipeline(
     columns = detect_schema_from_file(
         s3_creds['access_key_id'],
         s3_creds['secret_access_key'],
-        s3_creds['bucket'],
+        s3_bucket,
         s3_path,
         s3_creds.get('region', 'us-east-1'),
         file_format
@@ -123,9 +124,9 @@ def create_one_time_pipeline(
         # Extract the directory path from the S3 path
         if '/' in s3_path:
             s3_prefix = '/'.join(s3_path.split('/')[:-1])
-            s3_url = f"s3://{s3_creds['bucket']}/{s3_prefix}/"
+            s3_url = f"s3://{s3_bucket}/{s3_prefix}/"
         else:
-            s3_url = f"s3://{s3_creds['bucket']}/"
+            s3_url = f"s3://{s3_bucket}/"
         
         stage_name = f"STAGE_{target_table}"
         create_external_stage(
@@ -156,6 +157,7 @@ def create_one_time_pipeline(
 def create_snowpipe_pipeline(
     s3_connection: Connection,
     snowflake_connection: Connection,
+    s3_bucket: str,
     s3_prefix: str,
     target_database: str,
     target_schema: str,
@@ -191,7 +193,7 @@ def create_snowpipe_pipeline(
         create_table_from_schema(conn, target_database, target_schema, target_table, columns)
         
         # Create external stage
-        s3_url = f"s3://{s3_creds['bucket']}/{s3_prefix}"
+        s3_url = f"s3://{s3_bucket}/{s3_prefix}"
         stage_name = f"STAGE_{target_table}"
         create_external_stage(
             conn,

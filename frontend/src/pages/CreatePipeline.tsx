@@ -16,6 +16,11 @@ export default function CreatePipeline() {
   const [snowflakeConnections, setSnowflakeConnections] = useState<Connection[]>([])
   const [selectedS3Connection, setSelectedS3Connection] = useState<number | null>(null)
   const [selectedSnowflakeConnection, setSelectedSnowflakeConnection] = useState<number | null>(null)
+  const [buckets, setBuckets] = useState<string[]>([])
+  const [selectedBucket, setSelectedBucket] = useState<string>('')
+  const [bucketSearch, setBucketSearch] = useState<string>('')
+  const [showBucketDropdown, setShowBucketDropdown] = useState(false)
+  const [loadingBuckets, setLoadingBuckets] = useState(false)
 
   // Step 3: S3 files/path
   const [s3Files, setS3Files] = useState<S3File[]>([])
@@ -41,10 +46,20 @@ export default function CreatePipeline() {
   }, [])
 
   useEffect(() => {
-    if (selectedS3Connection && step === 3) {
-      loadS3Files()
+    if (selectedS3Connection && step >= 2) {
+      loadBuckets()
+    } else {
+      setBuckets([])
+      setSelectedBucket('')
+      setBucketSearch('')
     }
   }, [selectedS3Connection, step])
+
+  useEffect(() => {
+    if (selectedS3Connection && selectedBucket && step === 3) {
+      loadS3Files()
+    }
+  }, [selectedS3Connection, selectedBucket, step])
 
   useEffect(() => {
     // Auto-detect file format when file is selected
@@ -118,19 +133,43 @@ export default function CreatePipeline() {
     }
   }
 
-  const loadS3Files = async () => {
+  const loadBuckets = async () => {
     if (!selectedS3Connection) return
+    setLoadingBuckets(true)
     try {
-      const files = await s3Api.list(selectedS3Connection, '')
+      const response = await connectionsApi.getBuckets(selectedS3Connection)
+      setBuckets(response.buckets || [])
+    } catch (error) {
+      console.error('Failed to load buckets:', error)
+      setBuckets([])
+    } finally {
+      setLoadingBuckets(false)
+    }
+  }
+
+  const loadS3Files = async () => {
+    if (!selectedS3Connection || !selectedBucket) return
+    try {
+      const files = await s3Api.list(selectedS3Connection, selectedBucket, '')
       setS3Files(files)
     } catch (error) {
       console.error('Failed to load S3 files:', error)
     }
   }
 
+  // Filter buckets based on search
+  const filteredBuckets = buckets.filter(bucket =>
+    bucket.toLowerCase().includes(bucketSearch.toLowerCase())
+  )
+
   const handleSubmit = async () => {
     if (!selectedS3Connection || !selectedSnowflakeConnection) {
       setError('Please select both S3 and Snowflake connections')
+      return
+    }
+
+    if (!selectedBucket) {
+      setError('Please select a bucket')
       return
     }
 
@@ -152,6 +191,7 @@ export default function CreatePipeline() {
         name: pipelineName || `Pipeline_${Date.now()}`,
         ingestion_type: ingestionType,
         s3_connection_id: selectedS3Connection,
+        s3_bucket: selectedBucket,
         snowflake_connection_id: selectedSnowflakeConnection,
         s3_path: ingestionType === 'one_time' ? selectedFile! : s3Prefix,
         target_database: targetDatabase,
@@ -175,7 +215,7 @@ export default function CreatePipeline() {
       case 1:
         return ingestionType !== null
       case 2:
-        return selectedS3Connection !== null && selectedSnowflakeConnection !== null
+        return selectedS3Connection !== null && selectedSnowflakeConnection !== null && selectedBucket !== ''
       case 3:
         if (ingestionType === 'one_time') {
           return selectedFile !== null
@@ -263,7 +303,12 @@ export default function CreatePipeline() {
               </label>
               <select
                 value={selectedS3Connection || ''}
-                onChange={(e) => setSelectedS3Connection(Number(e.target.value))}
+                onChange={(e) => {
+                  setSelectedS3Connection(Number(e.target.value))
+                  setSelectedBucket('') // Reset bucket when connection changes
+                  setBucketSearch('')
+                  setShowBucketDropdown(false)
+                }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Select S3 connection...</option>
@@ -274,6 +319,91 @@ export default function CreatePipeline() {
                 ))}
               </select>
             </div>
+            {selectedS3Connection && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Bucket <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={selectedBucket || bucketSearch}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setBucketSearch(value)
+                      setShowBucketDropdown(true)
+                      // Clear selection if user is typing something different
+                      if (selectedBucket && value !== selectedBucket) {
+                        setSelectedBucket('')
+                      }
+                    }}
+                    onFocus={() => {
+                      setShowBucketDropdown(true)
+                      // When focusing with a selected bucket, allow editing
+                      if (selectedBucket) {
+                        setBucketSearch(selectedBucket)
+                        setSelectedBucket('')
+                      } else if (!bucketSearch && buckets.length > 0) {
+                        // Show all buckets when focusing on empty input
+                        setBucketSearch('')
+                      }
+                    }}
+                    onBlur={() => {
+                      // Delay hiding dropdown to allow click events
+                      setTimeout(() => setShowBucketDropdown(false), 200)
+                    }}
+                    placeholder={loadingBuckets ? 'Loading buckets...' : 'Type to search buckets...'}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={loadingBuckets}
+                  />
+                  {showBucketDropdown && !selectedBucket && filteredBuckets.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                      {filteredBuckets.map((bucket) => (
+                        <button
+                          key={bucket}
+                          type="button"
+                          onClick={() => {
+                            setSelectedBucket(bucket)
+                            setBucketSearch('')
+                            setShowBucketDropdown(false)
+                          }}
+                          className="w-full text-left px-4 py-2 hover:bg-blue-50"
+                        >
+                          {bucket}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {showBucketDropdown && !selectedBucket && bucketSearch && filteredBuckets.length === 0 && buckets.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg p-4 text-sm text-gray-500">
+                      No buckets found matching "{bucketSearch}"
+                    </div>
+                  )}
+                </div>
+                {selectedBucket && (
+                  <div className="mt-1 flex items-center justify-between">
+                    <p className="text-xs text-green-600">
+                      Selected: <strong>{selectedBucket}</strong>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedBucket('')
+                        setBucketSearch('')
+                      }}
+                      className="text-xs text-red-600 hover:text-red-800"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+                {!loadingBuckets && buckets.length === 0 && selectedS3Connection && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    No buckets found for this connection
+                  </p>
+                )}
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Snowflake Connection

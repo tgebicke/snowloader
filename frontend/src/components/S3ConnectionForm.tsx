@@ -10,7 +10,6 @@ export default function S3ConnectionForm({ onSuccess }: S3ConnectionFormProps) {
     name: '',
     access_key_id: '',
     secret_access_key: '',
-    bucket: '',
     region: 'us-east-1',
   })
   const [loading, setLoading] = useState(false)
@@ -74,19 +73,6 @@ export default function S3ConnectionForm({ onSuccess }: S3ConnectionFormProps) {
           required
           value={formData.secret_access_key}
           onChange={(e) => setFormData({ ...formData, secret_access_key: e.target.value })}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Bucket Name
-        </label>
-        <input
-          type="text"
-          required
-          value={formData.bucket}
-          onChange={(e) => setFormData({ ...formData, bucket: e.target.value })}
           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
