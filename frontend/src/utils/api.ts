@@ -170,3 +170,146 @@ export interface PipelineRun {
   rows_loaded: number | null
 }
 
+// Contract and Project Types
+export interface ColumnSchema {
+  name: string
+  type: string
+  nullable: boolean
+}
+
+export interface DataGovernancePerson {
+  name: string
+  email: string
+  role: string
+}
+
+export interface DataGovernance {
+  owners?: DataGovernancePerson[]
+  stakeholders?: DataGovernancePerson[]
+  stewards?: DataGovernancePerson[]
+}
+
+export interface Project {
+  id: number
+  organization: string
+  department: string
+  project: string
+  data_governance?: DataGovernance
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectCreateData {
+  organization: string
+  department: string
+  project: string
+  data_governance?: DataGovernance
+}
+
+export interface Contract {
+  id: number
+  name: string
+  description?: string
+  organization: string
+  department: string
+  project_name: string
+  source: string
+  project_id?: number
+  contract_data: Record<string, any>
+  created_at: string
+  updated_at: string
+}
+
+export interface ContractCreateData {
+  name: string
+  description?: string
+  organization: string
+  department: string
+  project_name: string
+  source: string
+  project_id?: number
+  contract_data: Record<string, any>
+}
+
+export interface ContractUpdateData {
+  name?: string
+  description?: string
+  organization?: string
+  department?: string
+  project_name?: string
+  source?: string
+  project_id?: number
+  contract_data?: Record<string, any>
+}
+
+export interface SchemaDetectionRequest {
+  connection_id: number
+  bucket: string
+  sample_file: string
+  file_format: string
+}
+
+export interface SchemaDetectionResponse {
+  schema: ColumnSchema[]
+}
+
+// Project APIs
+export const projectsApi = {
+  list: (organization?: string, department?: string) => {
+    const params = new URLSearchParams()
+    if (organization) params.append('organization', organization)
+    if (department) params.append('department', department)
+    const query = params.toString()
+    return apiRequest<Project[]>(`/api/projects${query ? '?' + query : ''}`)
+  },
+  get: (id: number) => apiRequest<Project>(`/api/projects/${id}`),
+  create: (data: ProjectCreateData) => apiRequest<Project>('/api/projects', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  update: (id: number, data: Partial<ProjectCreateData>) => apiRequest<Project>(`/api/projects/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  updateGovernance: (id: number, governance: DataGovernance) => apiRequest<Project>(`/api/projects/${id}/governance`, {
+    method: 'PUT',
+    body: JSON.stringify({ data_governance: governance }),
+  }),
+}
+
+// Contract APIs
+export const contractsApi = {
+  list: (filters?: { organization?: string; department?: string; project_name?: string; source?: string }) => {
+    const params = new URLSearchParams()
+    if (filters?.organization) params.append('organization', filters.organization)
+    if (filters?.department) params.append('department', filters.department)
+    if (filters?.project_name) params.append('project_name', filters.project_name)
+    if (filters?.source) params.append('source', filters.source)
+    const query = params.toString()
+    return apiRequest<Contract[]>(`/api/contracts${query ? '?' + query : ''}`)
+  },
+  get: (id: number) => apiRequest<Contract>(`/api/contracts/${id}`),
+  create: (data: ContractCreateData) => apiRequest<Contract>('/api/contracts', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  update: (id: number, data: ContractUpdateData) => apiRequest<Contract>(`/api/contracts/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  delete: (id: number) => apiRequest(`/api/contracts/${id}`, { method: 'DELETE' }),
+  validate: (contractData: Record<string, any>, format: string = 'yaml') => apiRequest<{ valid: boolean; errors?: string[] }>('/api/contracts/validate', {
+    method: 'POST',
+    body: JSON.stringify({ contract_data: contractData, format }),
+  }),
+  detectSchema: (request: SchemaDetectionRequest) => apiRequest<SchemaDetectionResponse>('/api/contracts/detect-schema', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  }),
+  preview: (id: number, environment: string = 'default') => apiRequest<Record<string, any>>(`/api/contracts/${id}/preview?environment=${environment}`),
+  getYaml: (id: number, environment?: string) => {
+    const params = environment ? `?environment=${environment}` : ''
+    return apiRequest<{ yaml: string }>(`/api/contracts/${id}/yaml${params}`)
+  },
+}
+

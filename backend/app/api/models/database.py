@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, Enum, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Text, Enum, ForeignKey, JSON, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -28,17 +28,33 @@ class RunStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    users = relationship("User", back_populates="tenant")
+    projects = relationship("Project", back_populates="tenant")
+    contracts = relationship("Contract", back_populates="tenant")
+
+
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
     clerk_user_id = Column(String, unique=True, index=True, nullable=False)
     email = Column(String, nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    tenant = relationship("Tenant", back_populates="users")
     connections = relationship("Connection", back_populates="user")
     pipelines = relationship("Pipeline", back_populates="user")
+    contracts = relationship("Contract", back_populates="user")
 
 
 class Connection(Base):
@@ -91,4 +107,54 @@ class PipelineRun(Base):
     run_metadata = Column(JSON, nullable=True)  # Additional run metadata
 
     pipeline = relationship("Pipeline", back_populates="runs")
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    organization = Column(String, nullable=False)
+    department = Column(String, nullable=False)
+    project = Column(String, nullable=False)
+    data_governance = Column(JSON, nullable=True)  # Contains owners, stakeholders, stewards
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    tenant = relationship("Tenant", back_populates="projects")
+    contracts = relationship("Contract", back_populates="project")
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'organization', 'department', 'project', name='uq_project_org_dept_proj'),
+        Index('idx_project_tenant_org', 'tenant_id', 'organization'),
+    )
+
+
+class Contract(Base):
+    __tablename__ = "contracts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)  # Optional reference to project
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    organization = Column(String, nullable=False)
+    department = Column(String, nullable=False)
+    project_name = Column(String, nullable=False)  # Denormalized for filtering
+    source = Column(String, nullable=False)
+    contract_data = Column(JSON, nullable=False)  # Full contract structure
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    tenant = relationship("Tenant", back_populates="contracts")
+    user = relationship("User", back_populates="contracts")
+    project = relationship("Project", back_populates="contracts")
+
+    __table_args__ = (
+        Index('idx_contract_tenant_org', 'tenant_id', 'organization'),
+        Index('idx_contract_tenant_dept', 'tenant_id', 'department'),
+        Index('idx_contract_tenant_project', 'tenant_id', 'project_name'),
+        Index('idx_contract_tenant_source', 'tenant_id', 'source'),
+    )
 

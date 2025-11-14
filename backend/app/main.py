@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.routes import connections, pipelines, s3
+from app.api.routes import connections, pipelines, s3, contracts, projects
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
@@ -18,6 +18,8 @@ app.add_middleware(
 app.include_router(connections.router, prefix=settings.API_V1_STR, tags=["connections"])
 app.include_router(s3.router, prefix=settings.API_V1_STR, tags=["s3"])
 app.include_router(pipelines.router, prefix=settings.API_V1_STR, tags=["pipelines"])
+app.include_router(contracts.router, prefix=settings.API_V1_STR, tags=["contracts"])
+app.include_router(projects.router, prefix=settings.API_V1_STR, tags=["projects"])
 
 
 @app.get("/")

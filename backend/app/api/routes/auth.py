@@ -6,6 +6,7 @@ from app.core.config import settings
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.api.models.database import User
+from app.core.tenant import get_or_create_default_tenant
 
 security = HTTPBearer()
 
@@ -44,11 +45,20 @@ async def get_current_user(
         if not user:
             # Extract email from token if available
             email = decoded.get("email", "")
+            # Assign default tenant to new user
+            tenant = get_or_create_default_tenant(db)
             user = User(
                 clerk_user_id=clerk_user_id,
-                email=email
+                email=email,
+                tenant_id=tenant.id
             )
             db.add(user)
+            db.commit()
+            db.refresh(user)
+        elif not user.tenant_id:
+            # Ensure existing users have a tenant (migration support)
+            tenant = get_or_create_default_tenant(db)
+            user.tenant_id = tenant.id
             db.commit()
             db.refresh(user)
         
